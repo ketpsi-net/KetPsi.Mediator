@@ -5,11 +5,13 @@
 		<Company>ketpsi-net</Company>
 		<AssemblyName>$(AssemblyName)</AssemblyName>
 		<PackageId>$(AssemblyName)</PackageId>
-		<PackageLicenseExpression>MIT</PackageLicenseExpression>
-		<Copyright>Copyright (c) 2026 ketpsi-net</Copyright>
-		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<RepositoryUrl>https://github.com/ketpsi-net/KetPsi.Mediator</RepositoryUrl>
 		<PackageProjectUrl>https://github.com/ketpsi-net/KetPsi.Mediator</PackageProjectUrl>
+		<PackageIcon>icon.png</PackageIcon>
+		<Icon>icon.png</Icon>
+		<Copyright>Copyright © 2027</Copyright>
+		<PackageLicenseFile>LICENSE</PackageLicenseFile>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 	</PropertyGroup>
 
 	<ItemGroup>
