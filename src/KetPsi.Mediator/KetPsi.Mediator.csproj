@@ -1,0 +1,41 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<Import Project="../../version.props"></Import>
+
+	<PropertyGroup>
+		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<Description>High-performance mediator powered by C# interceptors and source generators. Call sites of IMediator.Send are rewritten to invoke handlers directly.</Description>
+	</PropertyGroup>
+
+	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.20" />
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
+	</ItemGroup>
+
+	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+		<PackageReference Include="KetPsi.Mediator.Abstractions" Version="$(Version)" />
+	</ItemGroup>
+	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+		<ProjectReference Include="..\KetPsi.Mediator.Abstractions\KetPsi.Mediator.Abstractions.csproj" />
+	</ItemGroup>
+
+
+	<!-- Consumers should also reference the generator -->
+	<ItemGroup>
+		<None Include="..\KetPsi.Mediator.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Mediator.Generator.dll"
+			  Pack="true"
+			  PackagePath="analyzers/dotnet/cs"
+			  Visible="false"
+			  Condition="Exists('..\KetPsi.Mediator.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Mediator.Generator.dll')" />
+	</ItemGroup>
+
+</Project>
