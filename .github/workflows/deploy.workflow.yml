@@ -1,0 +1,94 @@
+name: DeployPackages
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+      - '*.*.*-preview.*'
+
+jobs:
+  deploy-prerequisite:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Fetch all branches
+        run: git fetch --all
+
+      - name: Verify tag format and branch
+        env:
+          CI_COMMIT_TAG: ${{ github.ref_name }}
+        run: |
+          branches=$(git show --no-patch --format=%D $CI_COMMIT_TAG)
+          echo "Branches: $branches"
+          echo "Tag: $CI_COMMIT_TAG"
+          if [[ $branches == *release* && $CI_COMMIT_TAG =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]; then
+            echo "Matched Release preview tag pattern"
+            exit 0
+          elif [[ $branches == *main* && $CI_COMMIT_TAG =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Matched Main tag pattern"
+            exit 0
+          else
+            echo "Created tag does not meet requirements."
+            exit 1
+          fi
+      - name: Check for version match in version.props
+        env:
+          CI_COMMIT_TAG: ${{ github.ref_name }}
+        run: |
+          if ! grep -q "$CI_COMMIT_TAG" version.props; then
+            echo "Version mismatch: $CI_COMMIT_TAG not found in version.props"
+            exit 1
+          fi
+  deploy-abstractions:
+    needs: [deploy-prerequisite]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Pack KetPsi.Mediator.Abstractions
+        id: pack-abstraction
+        uses: ./.github/workflows/actions/nuget-pack
+        with:
+          project_path: src/KetPsi.Mediator.Abstractions/KetPsi.Mediator.Abstractions.csproj
+      - name: Push KetPsi.Mediator.Abstractions
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+        uses: ./.github/workflows/actions/nuget-push
+        with:
+          package_path: 'pack/KetPsi.Mediator.Abstractions.${{ github.ref_name }}.nupkg'
+
+  wait-for-abstractions-package:
+    needs: [deploy-abstractions]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for KetPsi.Mediator.Abstractions
+        uses: ./.github/workflows/actions/nuget-wait
+        with:
+          package_name: KetPsi.Mediator.Abstractions
+          package_version: ${{ github.ref_name }}
+
+  deploy-mediator:
+    needs: [deploy-prerequisite]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Pack KetPsi.Mediator
+        id: pack-mediator
+        uses: ./.github/workflows/actions/nuget-pack
+        with:
+          projects_to_build_path: src/KetPsi.Mediator.Generator/KetPsi.Mediator.Generator.csproj
+          project_path: src/http/KetPsi.Mediator/KetPsi.Mediator.csproj
+      - name: Push KetPsi.Mediator
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+        uses: ./.github/workflows/actions/nuget-push
+        with:
+          package_path: 'pack/KetPsi.Mediator.${{ github.ref_name }}.nupkg'
