@@ -74,7 +74,7 @@ jobs:
           package_version: ${{ github.ref_name }}
 
   deploy-mediator:
-    needs: [deploy-prerequisite]
+    needs: [wait-for-abstractions-package]
     runs-on: self-hosted
     steps:
       - name: Checkout code
@@ -84,7 +84,7 @@ jobs:
         uses: ./.github/workflows/actions/nuget-pack
         with:
           projects_to_build_path: src/KetPsi.Mediator.Generator/KetPsi.Mediator.Generator.csproj
-          project_path: src/http/KetPsi.Mediator/KetPsi.Mediator.csproj
+          project_path: src/KetPsi.Mediator/KetPsi.Mediator.csproj
       - name: Push KetPsi.Mediator
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
