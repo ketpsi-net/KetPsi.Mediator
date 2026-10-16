@@ -33,21 +33,10 @@ public sealed class PlaceOrderHandler : ICommandHandler<PlaceOrderCommand, Guid>
 }
 
 // ---------- Queries ----------
+
 public sealed record GetOrderQuery(Guid OrderId) : IQuery<OrderDto>;
-public sealed record GetOrderQueryWithBehavior(Guid OrderId) : IQuery<OrderDto>;
 
 public sealed record OrderDto(Guid Id, string Product, int Quantity);
-
-public sealed class GetOrderWithBehaviorHandler : IQueryHandler<GetOrderQueryWithBehavior, OrderDto>
-{
-    public int CallCount;
-
-    public ValueTask<OrderDto> Handle(GetOrderQueryWithBehavior query, CancellationToken cancellationToken = default)
-    {
-        CallCount++;
-        return ValueTask.FromResult(new OrderDto(query.OrderId, "Widget", 5));
-    }
-}
 
 public sealed class GetOrderHandler : IQueryHandler<GetOrderQuery, OrderDto>
 {
@@ -99,12 +88,12 @@ public sealed class CountingBehavior<TRequest, TResponse> : IPipelineBehavior<TR
 }
 
 /// <summary>Records the order in which behaviors execute (before/after).</summary>
-public sealed class OrderedBehaviorA : IPipelineBehavior<GetOrderQueryWithBehavior, OrderDto>
+public sealed class OrderedBehaviorA : IPipelineBehavior<GetOrderQuery, OrderDto>
 {
     public static List<string> Log { get; } = new();
 
     public async ValueTask<OrderDto> Handle(
-        GetOrderQueryWithBehavior request,
+        GetOrderQuery request,
         RequestHandlerDelegate<OrderDto> next,
         CancellationToken cancellationToken)
     {
@@ -115,10 +104,10 @@ public sealed class OrderedBehaviorA : IPipelineBehavior<GetOrderQueryWithBehavi
     }
 }
 
-public sealed class OrderedBehaviorB : IPipelineBehavior<GetOrderQueryWithBehavior, OrderDto>
+public sealed class OrderedBehaviorB : IPipelineBehavior<GetOrderQuery, OrderDto>
 {
     public async ValueTask<OrderDto> Handle(
-        GetOrderQueryWithBehavior request,
+        GetOrderQuery request,
         RequestHandlerDelegate<OrderDto> next,
         CancellationToken cancellationToken)
     {
