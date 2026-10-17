@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace KetPsi.Mediator.Tests;
@@ -8,7 +9,9 @@ public class MediatorTests
     private static ServiceProvider BuildServices(Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        // Tests resolve from the root provider; use Singleton so that is valid.
+        // Production web apps should call AddMediatorHandlers() (Scoped default) and resolve from a scope.
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         configure?.Invoke(services);
         return services.BuildServiceProvider();
     }
@@ -94,7 +97,6 @@ public class MediatorTests
         var mediator = sp.GetRequiredService<IMediator>();
 
         using var cts = new CancellationTokenSource();
-        // not cancelled
         await mediator.Send(new CancelTestCommand(), cts.Token);
     }
 
@@ -126,7 +128,7 @@ public class MediatorTests
     public void AddMediatorHandlers_RegistersIMediator()
     {
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         using var sp = services.BuildServiceProvider();
 
         Assert.NotNull(sp.GetService<IMediator>());
@@ -137,7 +139,7 @@ public class MediatorTests
     public void AddMediatorHandlers_RegistersAllDiscoveredHandlers()
     {
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         using var sp = services.BuildServiceProvider();
 
         Assert.NotNull(sp.GetService<ICommandHandler<CreateOrderCommand>>());
@@ -149,8 +151,10 @@ public class MediatorTests
     [Fact]
     public void AddMediatorHandlers_ConcreteAndInterface_ResolveToSameInstance()
     {
+        // Shared-instance forwarding is independent of lifetime; use Singleton so
+        // root provider resolution is valid without creating a scope.
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         using var sp = services.BuildServiceProvider();
 
         var concrete = sp.GetRequiredService<CreateOrderHandler>();
@@ -159,7 +163,7 @@ public class MediatorTests
         Assert.Same(concrete, viaInterface);
     }
 
-    // ---------- Reflection fallback (dynamic request type) ----------
+    // ---------- Reflection fallback ----------
 
     [Fact]
     public async Task Fallback_WhenRequestTypedAsICommand_StillInvokesHandler()
@@ -193,16 +197,135 @@ public class MediatorTests
     [Fact]
     public async Task Send_NoHandlerRegistered_ThrowsInvalidOperationException()
     {
-        // Fresh container with only IMediator – no handlers
         var services = new ServiceCollection();
         services.AddSingleton<IMediator, Mediator>();
         using var sp = services.BuildServiceProvider();
         var mediator = sp.GetRequiredService<IMediator>();
 
-        // Use interface-typed variable so the interceptor does not rewrite the call
         ICommand cmd = new CreateOrderCommand("orphan", 1);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await mediator.Send(cmd));
+    }
+
+    // ---------- ServiceLifetime ----------
+
+    [Fact]
+    public void AddMediatorHandlers_Scoped_ResolvesDifferentInstancesPerScope()
+    {
+        var services = new ServiceCollection();
+        services.AddMediatorHandlers(ServiceLifetime.Scoped);
+        using var sp = services.BuildServiceProvider();
+
+        CreateOrderHandler a;
+        CreateOrderHandler b;
+
+        using (var scope1 = sp.CreateScope())
+        {
+            a = scope1.ServiceProvider.GetRequiredService<CreateOrderHandler>();
+            var a2 = scope1.ServiceProvider.GetRequiredService<CreateOrderHandler>();
+            Assert.Same(a, a2);
+        }
+
+        using (var scope2 = sp.CreateScope())
+        {
+            b = scope2.ServiceProvider.GetRequiredService<CreateOrderHandler>();
+        }
+
+        Assert.NotSame(a, b);
+    }
+
+    [Fact]
+    public void AddMediatorHandlers_Scoped_MediatorIsScoped()
+    {
+        var services = new ServiceCollection();
+        services.AddMediatorHandlers(ServiceLifetime.Scoped);
+        using var sp = services.BuildServiceProvider();
+
+        IMediator m1, m2;
+        using (var scope1 = sp.CreateScope())
+            m1 = scope1.ServiceProvider.GetRequiredService<IMediator>();
+        using (var scope2 = sp.CreateScope())
+            m2 = scope2.ServiceProvider.GetRequiredService<IMediator>();
+
+        Assert.NotSame(m1, m2);
+    }
+
+    // ---------- Zero-behavior fast path ----------
+
+    [Fact]
+    public async Task FastPath_QueryWithNoBehaviors_ReturnsHandlerResult()
+    {
+        using var sp = BuildServices();
+        var handler = sp.GetRequiredService<GetOrderHandler>();
+        var mediator = sp.GetRequiredService<IMediator>();
+
+        var id = Guid.NewGuid();
+        var result = await mediator.Send(new GetOrderQuery(id));
+
+        Assert.Equal(id, result.Id);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task FastPath_CommandWithResponse_NoBehaviors_ReturnsHandlerResult()
+    {
+        using var sp = BuildServices();
+        var handler = sp.GetRequiredService<PlaceOrderHandler>();
+        var mediator = sp.GetRequiredService<IMediator>();
+
+        var id = await mediator.Send(new PlaceOrderCommand("Fast", 1));
+
+        Assert.NotEqual(Guid.Empty, id);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task FastPath_VoidCommand_NoBehaviors_InvokesHandler()
+    {
+        using var sp = BuildServices();
+        var handler = sp.GetRequiredService<CreateOrderHandler>();
+        var mediator = sp.GetRequiredService<IMediator>();
+
+        await mediator.Send(new CreateOrderCommand("FastVoid", 1));
+
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task Fallback_WithBehavior_InvokesBehavior()
+    {
+        CountingBehavior<GetOrderQuery, OrderDto>.CallCount = 0;
+
+        var services = new ServiceCollection();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IPipelineBehavior<GetOrderQuery, OrderDto>, CountingBehavior<GetOrderQuery, OrderDto>>());
+        using var sp = services.BuildServiceProvider();
+        var mediator = sp.GetRequiredService<IMediator>();
+
+        // Interface-typed variable forces the reflection fallback path
+        IRequest<OrderDto> request = new GetOrderQuery(Guid.NewGuid());
+        var result = await mediator.Send(request);
+
+        Assert.Equal("Widget", result.Product);
+        Assert.Equal(1, CountingBehavior<GetOrderQuery, OrderDto>.CallCount);
+    }
+
+    [Fact]
+    public async Task Fallback_VoidCommand_WithUnitBehavior_InvokesBehavior()
+    {
+        UnitCountingBehavior.CallCount = 0;
+
+        var services = new ServiceCollection();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
+        // UnitCountingBehavior may already be auto-registered; ensure at least one run
+        using var sp = services.BuildServiceProvider();
+        var mediator = sp.GetRequiredService<IMediator>();
+
+        ICommand cmd = new CreateOrderCommand("fallback-unit", 1);
+        await mediator.Send(cmd);
+
+        Assert.True(UnitCountingBehavior.CallCount >= 1);
     }
 }

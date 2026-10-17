@@ -278,43 +278,54 @@ namespace System.Runtime.CompilerServices
         sb.AppendLine();
         sb.AppendLine("namespace KetPsi.Mediator");
         sb.AppendLine("{");
-        // Emitted only when this compilation defines handlers/behaviors, so multi-project solutions
-        // that put handlers in one assembly and call sites in another do not get duplicate public types.
         sb.AppendLine("    /// <summary>");
         sb.AppendLine("    /// Generated extension that registers IMediator, all discovered handlers,");
-        sb.AppendLine("    /// and all discovered pipeline behaviors in this compilation.");
+        sb.AppendLine("    /// and all discovered closed pipeline behaviors in this compilation.");
         sb.AppendLine("    /// </summary>");
         sb.AppendLine("    public static class GeneratedMediatorServiceCollectionExtensions");
         sb.AppendLine("    {");
-        sb.AppendLine("        public static IServiceCollection AddMediatorHandlers(this IServiceCollection services)");
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// Registers the mediator, all handlers, and closed pipeline behaviors.");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine("        /// <param name=\"services\">The service collection to configure.</param>");
+        sb.AppendLine("        /// <param name=\"lifetime\">");
+        sb.AppendLine("        /// Lifetime for IMediator, handlers, and behaviors. Defaults to Scoped.");
+        sb.AppendLine("        /// Use Scoped for per-request web applications.");
+        sb.AppendLine("        /// </param>");
+        sb.AppendLine("        public static IServiceCollection AddMediatorHandlers(");
+        sb.AppendLine("            this IServiceCollection services,");
+        sb.AppendLine("            ServiceLifetime lifetime = ServiceLifetime.Scoped)");
         sb.AppendLine("        {");
-        sb.AppendLine("            // Core mediator – single registration so callers only need AddMediatorHandlers()");
-        sb.AppendLine("            services.TryAddSingleton<global::KetPsi.Mediator.IMediator, global::KetPsi.Mediator.Mediator>();");
+        sb.AppendLine("            services.TryAdd(ServiceDescriptor.Describe(");
+        sb.AppendLine("                typeof(global::KetPsi.Mediator.IMediator),");
+        sb.AppendLine("                typeof(global::KetPsi.Mediator.Mediator),");
+        sb.AppendLine("                lifetime));");
         sb.AppendLine();
 
         foreach (var h in handlers.Distinct())
         {
-            // Register the concrete type once, then map every interface to the SAME instance.
-            sb.AppendLine($"            services.TryAddSingleton<{h.HandlerType}>();");
+            // Concrete type + interface forwarding share the same lifetime and instance.
+            sb.AppendLine($"            services.TryAdd(ServiceDescriptor.Describe(typeof({h.HandlerType}), typeof({h.HandlerType}), lifetime));");
 
             switch (h.Kind)
             {
                 case HandlerKind.Command:
-                    sb.AppendLine($"            services.TryAddSingleton<global::KetPsi.Mediator.ICommandHandler<{h.RequestType}>>(sp => sp.GetRequiredService<{h.HandlerType}>());");
+                    sb.AppendLine($"            services.TryAdd(ServiceDescriptor.Describe(typeof(global::KetPsi.Mediator.ICommandHandler<{h.RequestType}>), sp => sp.GetRequiredService<{h.HandlerType}>(), lifetime));");
                     break;
                 case HandlerKind.CommandWithResponse:
-                    sb.AppendLine($"            services.TryAddSingleton<global::KetPsi.Mediator.ICommandHandler<{h.RequestType}, {h.ResponseType}>>(sp => sp.GetRequiredService<{h.HandlerType}>());");
+                    sb.AppendLine($"            services.TryAdd(ServiceDescriptor.Describe(typeof(global::KetPsi.Mediator.ICommandHandler<{h.RequestType}, {h.ResponseType}>), sp => sp.GetRequiredService<{h.HandlerType}>(), lifetime));");
                     break;
                 case HandlerKind.Query:
-                    sb.AppendLine($"            services.TryAddSingleton<global::KetPsi.Mediator.IQueryHandler<{h.RequestType}, {h.ResponseType}>>(sp => sp.GetRequiredService<{h.HandlerType}>());");
+                    sb.AppendLine($"            services.TryAdd(ServiceDescriptor.Describe(typeof(global::KetPsi.Mediator.IQueryHandler<{h.RequestType}, {h.ResponseType}>), sp => sp.GetRequiredService<{h.HandlerType}>(), lifetime));");
                     break;
             }
         }
 
+        // Closed behaviors only – open generics stay explicit so tests remain deterministic.
         foreach (var b in behaviors.Distinct())
         {
-            sb.AppendLine($"            services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(global::KetPsi.Mediator.IPipelineBehavior<{b.RequestType}, {b.ResponseType}>), typeof({b.BehaviorType})));");
-            sb.AppendLine($"            services.TryAddSingleton<{b.BehaviorType}>();");
+            // Register only via the open IPipelineBehavior<> slot so GetServices returns each behavior once.
+            sb.AppendLine($"            services.TryAddEnumerable(ServiceDescriptor.Describe(typeof(global::KetPsi.Mediator.IPipelineBehavior<{b.RequestType}, {b.ResponseType}>), typeof({b.BehaviorType}), lifetime));");
         }
 
         sb.AppendLine("            return services;");
@@ -340,7 +351,6 @@ namespace System.Runtime.CompilerServices
         sb.AppendLine();
         sb.AppendLine("namespace KetPsi.Mediator");
         sb.AppendLine("{");
-        // file-scoped so multiple generated files / projects never clash
         sb.AppendLine("    file static class MediatorInterceptors");
         sb.AppendLine("    {");
 
@@ -355,10 +365,13 @@ namespace System.Runtime.CompilerServices
             if (call.Kind is HandlerKind.Query or HandlerKind.CommandWithResponse
                 && call.ResponseType is not null)
             {
-                // Signature must match IMediator.Send<TResponse>(IRequest<TResponse>, CancellationToken)
                 string handlerResolve = call.Kind == HandlerKind.Query
                     ? $"global::KetPsi.Mediator.IQueryHandler<{call.RequestType}, {call.ResponseType}>"
                     : $"global::KetPsi.Mediator.ICommandHandler<{call.RequestType}, {call.ResponseType}>";
+
+                string executeMethod = call.Kind == HandlerKind.Query
+                    ? "ExecuteQuery"
+                    : "ExecuteCommand";
 
                 sb.AppendLine($"        public static ValueTask<{call.ResponseType}> {interceptorName}(");
                 sb.AppendLine($"            this global::KetPsi.Mediator.IMediator mediator,");
@@ -369,12 +382,11 @@ namespace System.Runtime.CompilerServices
                 sb.AppendLine($"            var m = (global::KetPsi.Mediator.Mediator)mediator;");
                 sb.AppendLine($"            var handler = m.GetRequiredService<{handlerResolve}>();");
                 sb.AppendLine($"            var behaviors = m.GetServices<global::KetPsi.Mediator.IPipelineBehavior<{call.RequestType}, {call.ResponseType}>>();");
-                sb.AppendLine("            return global::KetPsi.Mediator.PipelineExecutor.Execute(concrete, behaviors, handler.Handle, cancellationToken);");
+                sb.AppendLine($"            return global::KetPsi.Mediator.PipelineExecutor.{executeMethod}(concrete, behaviors, handler, cancellationToken);");
                 sb.AppendLine("        }");
             }
             else
             {
-                // Signature must match IMediator.Send(ICommand, CancellationToken)
                 sb.AppendLine($"        public static ValueTask {interceptorName}(");
                 sb.AppendLine($"            this global::KetPsi.Mediator.IMediator mediator,");
                 sb.AppendLine($"            global::KetPsi.Mediator.ICommand request,");
@@ -384,7 +396,7 @@ namespace System.Runtime.CompilerServices
                 sb.AppendLine($"            var m = (global::KetPsi.Mediator.Mediator)mediator;");
                 sb.AppendLine($"            var handler = m.GetRequiredService<global::KetPsi.Mediator.ICommandHandler<{call.RequestType}>>();");
                 sb.AppendLine($"            var behaviors = m.GetServices<global::KetPsi.Mediator.IPipelineBehavior<{call.RequestType}, global::KetPsi.Mediator.Unit>>();");
-                sb.AppendLine("            return global::KetPsi.Mediator.PipelineExecutor.ExecuteUnit(concrete, behaviors, handler.Handle, cancellationToken);");
+                sb.AppendLine("            return global::KetPsi.Mediator.PipelineExecutor.ExecuteUnit(concrete, behaviors, handler, cancellationToken);");
                 sb.AppendLine("        }");
             }
 
