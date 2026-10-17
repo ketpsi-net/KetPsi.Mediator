@@ -17,14 +17,20 @@ public static class ServiceCollectionExtensions
     /// Registers the default <see cref="IMediator"/> implementation.
     /// </summary>
     /// <param name="services">The service collection to configure.</param>
+    /// <param name="lifetime">
+    /// The lifetime for <see cref="IMediator"/>. Defaults to
+    /// <see cref="ServiceLifetime.Singleton"/>.
+    /// </param>
     /// <returns>The same <paramref name="services"/> instance for chaining.</returns>
     /// <remarks>
     /// Handlers and behaviors must still be registered separately
     /// (or via the generated <c>AddMediatorHandlers</c> method).
     /// </remarks>
-    public static IServiceCollection AddKetPsiMediator(this IServiceCollection services)
+    public static IServiceCollection AddKetPsiMediator(
+        this IServiceCollection services,
+        ServiceLifetime lifetime = ServiceLifetime.Singleton)
     {
-        services.TryAddSingleton<IMediator, Mediator>();
+        services.TryAdd(ServiceDescriptor.Describe(typeof(IMediator), typeof(Mediator), lifetime));
         return services;
     }
 }

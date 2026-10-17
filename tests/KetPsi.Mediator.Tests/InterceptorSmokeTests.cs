@@ -12,7 +12,7 @@ public class InterceptorSmokeTests
     public async Task ConcreteCommandCallSite_IsIntercepted()
     {
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         using var sp = services.BuildServiceProvider();
         var handler = sp.GetRequiredService<CreateOrderHandler>();
         var mediator = sp.GetRequiredService<IMediator>();
@@ -26,7 +26,7 @@ public class InterceptorSmokeTests
     public async Task ConcreteQueryCallSite_IsIntercepted()
     {
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         using var sp = services.BuildServiceProvider();
         var handler = sp.GetRequiredService<GetOrderHandler>();
         var mediator = sp.GetRequiredService<IMediator>();
@@ -42,7 +42,7 @@ public class InterceptorSmokeTests
     public async Task ConcreteCommandWithResponse_IsIntercepted()
     {
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         using var sp = services.BuildServiceProvider();
         var handler = sp.GetRequiredService<PlaceOrderHandler>();
         var mediator = sp.GetRequiredService<IMediator>();
@@ -57,7 +57,7 @@ public class InterceptorSmokeTests
     public async Task MultipleInterceptedCalls_EachInvokeHandler()
     {
         var services = new ServiceCollection();
-        services.AddMediatorHandlers();
+        services.AddMediatorHandlers(ServiceLifetime.Singleton);
         using var sp = services.BuildServiceProvider();
         var handler = sp.GetRequiredService<CreateOrderHandler>();
         var mediator = sp.GetRequiredService<IMediator>();
