@@ -1,4 +1,4 @@
-# KetPsi.Mediator 
+# KetPsi.Mediator
 
 [![NuGet](https://img.shields.io/nuget/v/KetPsi.Mediator.svg)](https://www.nuget.org/packages/KetPsi.Mediator/)
 [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
@@ -6,40 +6,50 @@
 
 **KetPsi.Mediator** is a high-performance, AOT-friendly mediator for .NET powered by **C# interceptors** and **Roslyn source generators**.
 
-Call sites of `IMediator.Send(...)` are rewritten at compile time to invoke the matching handler **directly**. No reflection, no dictionary lookups, no runtime type resolution on the hot path.
+Call sites of `IMediator.Send(...)` are rewritten at compile time to invoke the matching handler **directly** through dependency injection—with **zero reflection**, **zero dictionary lookups**, and **zero delegate or async state-machine allocations** on the no-behavior hot path.
 
-Inspired by the same techniques used in [KetPsi.Logging.Extensions](https://github.com/ketpsi-net/KetPsi.Logging.Extensions).
+Inspired by the same compile-time design philosophy used in [KetPsi.Logging.Extensions](https://github.com/ketpsi-net/KetPsi.Logging.Extensions).
 
 ---
 
-## Why
+## Why KetPsi.Mediator?
 
-Traditional mediators (MediatR, etc.) resolve handlers via `IServiceProvider` + reflection or a runtime dictionary on every call. That works, but it costs:
+Traditional mediators (such as MediatR) resolve handlers and wrappers via `IServiceProvider` + reflection or runtime dictionaries on every call. Other source-generated mediators generate a monolithic switch table at the composition root, requiring all handlers and requests to be visible in a single project.
 
-- Type lookups
-- Virtual/interface dispatch through the mediator
-- Extra allocations in some pipelines
+**KetPsi.Mediator** takes a different approach:
+- **Call-Site Interception:** Uses C# `[InterceptsLocation]` to rewrite `mediator.Send(new MyCommand(...))` at the exact call site.
+- **Zero-Allocation Fast Path:** When no pipeline behaviors are registered for a request, `PipelineExecutor` invokes `handler.Handle(...)` directly without allocating wrapper delegates (`Func<>`), lists, or `async` state machines.
+- **First-Class Multi-Project Architecture:** Interceptors inspect the request type's interfaces (`ICommand`, `ICommand<TResponse>`, `IQuery<TResponse>`) directly at the call site and resolve `ICommandHandler<>` / `IQueryHandler<,>` from DI. Your `Services` or `Presentation` project never needs compile-time access to concrete handler classes in your `Application` project.
+- **Scoped by Default:** Generated DI registrations default to `ServiceLifetime.Scoped` (configurable to `Singleton` or `Transient`), making handlers safe to use with EF Core `DbContext` and scoped unit-of-work services out of the box.
 
-KetPsi.Mediator keeps the same ergonomic API while making the common case a direct method call.
+---
 
 ## Packages
 
 | Package | Purpose |
-|---------|---------|
-| `KetPsi.Mediator.Abstractions` | `IMediator`, `ICommand`, `IQuery`, handler interfaces |
-| `KetPsi.Mediator` | Default `Mediator` implementation + DI extensions |
-| `KetPsi.Mediator.Generator` | Roslyn source generator (interceptors + handler registration) |
+|---|---|
+| `KetPsi.Mediator.Abstractions` | Core contracts (`IMediator`, `ICommand`, `ICommand<TResponse>`, `IQuery<TResponse>`, handler & behavior interfaces, `Unit`) |
+| `KetPsi.Mediator` | Runtime `Mediator` fallback implementation, `PipelineExecutor`, and manual DI extensions |
+| `KetPsi.Mediator.Generator` | Roslyn incremental source generator (emits C# call-site interceptors and `AddMediatorHandlers()` DI registration) |
+
+---
 
 ## Quick Start
 
-### 1. Install
+### 1. Install Packages
+
+Install in your projects:
 
 ```bash
 dotnet add package KetPsi.Mediator
 dotnet add package KetPsi.Mediator.Generator
 ```
 
-### 2. Enable interceptors in your project
+*(Note: If you have a pure contracts/application project that only defines commands and queries, you can reference `KetPsi.Mediator.Abstractions`.)*
+
+### 2. Enable Interceptors in Projects Calling `IMediator.Send`
+
+Add `InterceptorsPreviewNamespaces` to every project that invokes `mediator.Send(...)`:
 
 ```xml
 <PropertyGroup>
@@ -47,80 +57,122 @@ dotnet add package KetPsi.Mediator.Generator
 </PropertyGroup>
 ```
 
-### 3. Define requests & handlers
+### 3. Define Requests & Handlers
 
 ```csharp
+using KetPsi.Mediator;
+
+// 1. Fire-and-forget Command (no response)
 public sealed record CreateOrderCommand(string Product, int Quantity) : ICommand;
 
 public sealed class CreateOrderHandler : ICommandHandler<CreateOrderCommand>
 {
     public ValueTask Handle(CreateOrderCommand command, CancellationToken ct = default)
     {
-        // business logic
+        // Business logic
         return ValueTask.CompletedTask;
     }
 }
 
-public sealed record GetOrderQuery(Guid Id) : IQuery<OrderDto>;
-public sealed record OrderDto(Guid Id, string Product);
+// 2. Command with Response
+public sealed record PlaceOrderCommand(string Product, int Quantity) : ICommand<Guid>;
+
+public sealed class PlaceOrderHandler : ICommandHandler<PlaceOrderCommand, Guid>
+{
+    public ValueTask<Guid> Handle(PlaceOrderCommand command, CancellationToken ct = default)
+        => ValueTask.FromResult(Guid.NewGuid());
+}
+
+// 3. Query
+public sealed record GetOrderQuery(Guid OrderId) : IQuery<OrderDto>;
+public sealed record OrderDto(Guid Id, string Product, int Quantity);
 
 public sealed class GetOrderHandler : IQueryHandler<GetOrderQuery, OrderDto>
 {
     public ValueTask<OrderDto> Handle(GetOrderQuery query, CancellationToken ct = default)
-        => ValueTask.FromResult(new OrderDto(query.Id, "Widget"));
+        => ValueTask.FromResult(new OrderDto(query.OrderId, "Widget", 5));
 }
 ```
 
-### 4. Register
+### 4. Register with Dependency Injection
+
+Call the generated `AddMediatorHandlers()` extension method in your composition root:
 
 ```csharp
-builder.Services.AddMediatorHandlers(); // generated – registers IMediator + all handlers + behaviors
+// Defaults to ServiceLifetime.Scoped (recommended for ASP.NET Core / EF Core)
+builder.Services.AddMediatorHandlers();
+
+// Or specify a custom lifetime:
+builder.Services.AddMediatorHandlers(ServiceLifetime.Singleton);
 ```
 
-### 5. Use
+### 5. Dispatch Requests
 
 ```csharp
-await mediator.Send(new CreateOrderCommand("Widget", 3));
-var order = await mediator.Send(new GetOrderQuery(id));
+await mediator.Send(new CreateOrderCommand("Widget", 3), ct);
+
+Guid orderId = await mediator.Send(new PlaceOrderCommand("Gadget", 2), ct);
+
+OrderDto order = await mediator.Send(new GetOrderQuery(orderId), ct);
 ```
 
-The generator rewrites the concrete call sites above into direct handler invocations.
+---
 
-## How it works
+## Pipeline Behaviors
 
-1. The source generator scans the compilation for types implementing `ICommandHandler<>` / `IQueryHandler<,>`.
-2. It emits `AddMediatorHandlers()` that registers every discovered handler with DI.
-3. It finds every `mediator.Send(...)` call site whose request type is a concrete type.
-4. For each such call site it emits an interceptor method marked with `[InterceptsLocation]`.
-5. The C# compiler rewrites the original call to the generated interceptor, which resolves the handler once and calls `Handle` directly.
+Implement `IPipelineBehavior<TRequest, TResponse>` to add cross-cutting concerns such as validation, logging, metrics, or transactions. For void commands (`ICommand`), use `Unit` as `TResponse`.
 
-When the request type is not known statically (e.g. stored in an `ICommand` variable), the original runtime path (reflection fallback inside `Mediator`) is used.
+```csharp
+public sealed class ValidationBehavior : IPipelineBehavior<PlaceOrderCommand, Guid>
+{
+    public ValueTask<Guid> Handle(
+        PlaceOrderCommand request,
+        RequestHandlerDelegate<Guid> next,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Product))
+            throw new ArgumentException("Product must not be empty.", nameof(request));
 
-## Features
-
-- **Zero-reflection hot path** for concrete request types
-- **Compile-time handler discovery** and DI registration
-- **Single registration call** – `AddMediatorHandlers()` registers `IMediator`, handlers, and behaviors
-- **Pipeline behaviors** (`IPipelineBehavior<TRequest, TResponse>`)
-- **AOT compatible** (no runtime code generation)
-- **Commands** (no response / with response) and **Queries**
-- **CancellationToken** support
-- **Fallback** path for dynamic request types
-- Same structure and design philosophy as KetPsi.Logging.Extensions
-
-## Project structure
-
+        return next();
+    }
+}
 ```
-KetPsi.Mediator/
-├── src/
-│   ├── KetPsi.Mediator.Abstractions/   # Interfaces
-│   ├── KetPsi.Mediator/               # Runtime + DI
-│   └── KetPsi.Mediator.Generator/     # Source generator
-├── tests/
-│   └── KetPsi.Mediator.Tests/         # Comprehensive unit tests
-└── README.md
+
+- **Closed generic behaviors** (e.g., `IPipelineBehavior<PlaceOrderCommand, Guid>` or `IPipelineBehavior<CreateOrderCommand, Unit>`) are automatically discovered and registered by `AddMediatorHandlers()`.
+- **Open generic behaviors** (e.g., `LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>`) can be registered explicitly with DI:
+
+```csharp
+builder.Services.AddScoped(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
 ```
+
+---
+
+## Multi-Project Architecture
+
+`KetPsi.Mediator` is designed for clean architecture and modular monoliths:
+
+- **`Application` Project** (contains Commands, Queries, and Handlers):
+  - Reference `KetPsi.Mediator` and `KetPsi.Mediator.Generator`.
+  - The generator emits `AddMediatorHandlers()` for all handlers and closed behaviors in `Application`.
+- **`Services` / `WebApi` Project** (calls `IMediator.Send`):
+  - Reference `KetPsi.Mediator` and `KetPsi.Mediator.Generator`, and enable `<InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);KetPsi.Mediator</InterceptorsPreviewNamespaces>`.
+  - The generator emits `[InterceptsLocation]` methods for every concrete `mediator.Send(...)` call site without needing access to the handler classes in `Application`. Because `Services` has no handlers of its own, the generator will not emit a duplicate `AddMediatorHandlers()` extension class.
+
+---
+
+## Dynamic / Reflection Fallback
+
+When the concrete request type is not known statically at compile time (for example, when dispatching a polymorphic `ICommand` or `IRequest<TResponse>` variable), the call is not intercepted and falls back to `Mediator.Send(...)`:
+
+```csharp
+ICommand dynamicCommand = GetNextCommand();
+await mediator.Send(dynamicCommand, ct);
+```
+
+The runtime fallback resolves both the matching handler and any registered `IPipelineBehavior<,>` instances so pipeline behavior semantics remain consistent across static and dynamic dispatch.
+
+---
 
 ## License
 
-MIT
+MIT License — see [LICENSE](LICENSE) for details.
