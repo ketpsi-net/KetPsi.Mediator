@@ -36,4 +36,4 @@ public sealed record GetOrderQuery(Guid OrderId) : IQuery<OrderDto>;
 public sealed record OrderDto(Guid Id, string Product, int Quantity);
 ```
 
-For full runtime execution and compile-time call-site interception, install [`KetPsi.Mediator`](https://www.nuget.org/packages/KetPsi.Mediator/) and [`KetPsi.Mediator.Generator`](https://www.nuget.org/packages/KetPsi.Mediator.Generator/).
+For full runtime execution and compile-time call-site interception, install [`KetPsi.Mediator`](https://www.nuget.org/packages/KetPsi.Mediator/), which bundles the source generator.

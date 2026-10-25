@@ -20,7 +20,8 @@ Traditional mediators (such as MediatR) resolve handlers and wrappers via `IServ
 - **Call-Site Interception:** Uses C# `[InterceptsLocation]` to rewrite `mediator.Send(new MyCommand(...))` at the exact call site.
 - **Zero-Allocation Fast Path:** When no pipeline behaviors are registered for a request, `PipelineExecutor` invokes `handler.Handle(...)` directly without allocating wrapper delegates (`Func<>`), lists, or `async` state machines.
 - **First-Class Multi-Project Architecture:** Interceptors inspect the request type's interfaces (`ICommand`, `ICommand<TResponse>`, `IQuery<TResponse>`) directly at the call site and resolve `ICommandHandler<>` / `IQueryHandler<,>` from DI. Your `Services` or `Presentation` project never needs compile-time access to concrete handler classes in your `Application` project.
-- **Scoped by Default:** Generated DI registrations default to `ServiceLifetime.Scoped` (configurable to `Singleton` or `Transient`), making handlers safe to use with EF Core `DbContext` and scoped unit-of-work services out of the box.
+- **Scoped by Default:** DI registrations default to `ServiceLifetime.Scoped` (configurable to `Singleton` or `Transient`), making handlers safe to use with EF Core `DbContext` and scoped unit-of-work services out of the box.
+- **Test-Friendly:** Intercepted call sites only take the fast path when the receiver is the built-in `Mediator`. Mocks, fakes, and decorators of `IMediator` keep working unchanged.
 
 ---
 
@@ -29,23 +30,21 @@ Traditional mediators (such as MediatR) resolve handlers and wrappers via `IServ
 | Package | Purpose |
 |---|---|
 | `KetPsi.Mediator.Abstractions` | Core contracts (`IMediator`, `ICommand`, `ICommand<TResponse>`, `IQuery<TResponse>`, handler & behavior interfaces, `Unit`) |
-| `KetPsi.Mediator` | Runtime `Mediator` fallback implementation, `PipelineExecutor`, and manual DI extensions |
-| `KetPsi.Mediator.Generator` | Roslyn incremental source generator (emits C# call-site interceptors and `AddMediatorHandlers()` DI registration) |
+| `KetPsi.Mediator` | Runtime `Mediator` (fallback implementation), `PipelineExecutor`, manual DI extensions, **and the bundled source generator** (interceptors + `AddMediatorHandlers()`) |
+
+> The source generator ships inside the `KetPsi.Mediator` package. There is no separate generator package to install.
 
 ---
 
 ## Quick Start
 
-### 1. Install Packages
-
-Install in your projects:
+### 1. Install the Package
 
 ```bash
 dotnet add package KetPsi.Mediator
-dotnet add package KetPsi.Mediator.Generator
 ```
 
-*(Note: If you have a pure contracts/application project that only defines commands and queries, you can reference `KetPsi.Mediator.Abstractions`.)*
+*(Pure contracts projects that only declare commands, queries, and DTOs can reference `KetPsi.Mediator.Abstractions` instead.)*
 
 ### 2. Enable Interceptors in Projects Calling `IMediator.Send`
 
@@ -94,6 +93,8 @@ public sealed class GetOrderHandler : IQueryHandler<GetOrderQuery, OrderDto>
 }
 ```
 
+A single class may implement several handler interfaces. It is registered once and resolved for each of them.
+
 ### 4. Register with Dependency Injection
 
 Call the generated `AddMediatorHandlers()` extension method in your composition root:
@@ -138,12 +139,15 @@ public sealed class ValidationBehavior : IPipelineBehavior<PlaceOrderCommand, Gu
 }
 ```
 
-- **Closed generic behaviors** (e.g., `IPipelineBehavior<PlaceOrderCommand, Guid>` or `IPipelineBehavior<CreateOrderCommand, Unit>`) are automatically discovered and registered by `AddMediatorHandlers()`.
-- **Open generic behaviors** (e.g., `LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>`) can be registered explicitly with DI:
+- **Closed generic behaviors** (e.g., `IPipelineBehavior<PlaceOrderCommand, Guid>` or `IPipelineBehavior<CreateOrderCommand, Unit>`) declared as top-level types are automatically discovered and registered by `AddMediatorHandlers()`.
+- **Open generic behaviors** (e.g., `LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>`) and nested behavior classes must be registered explicitly with DI:
 
 ```csharp
 builder.Services.AddScoped(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
 ```
+
+- Behaviors run in registration order (first registered = outermost).
+- If a registered behavior cannot be constructed (for example a missing dependency), `Send` throws. Behaviors are never silently skipped.
 
 ---
 
@@ -152,24 +156,54 @@ builder.Services.AddScoped(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<
 `KetPsi.Mediator` is designed for clean architecture and modular monoliths:
 
 - **`Application` Project** (contains Commands, Queries, and Handlers):
-  - Reference `KetPsi.Mediator` and `KetPsi.Mediator.Generator`.
+  - Reference `KetPsi.Mediator`.
   - The generator emits `AddMediatorHandlers()` for all handlers and closed behaviors in `Application`.
 - **`Services` / `WebApi` Project** (calls `IMediator.Send`):
-  - Reference `KetPsi.Mediator` and `KetPsi.Mediator.Generator`, and enable `<InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);KetPsi.Mediator</InterceptorsPreviewNamespaces>`.
+  - Reference `KetPsi.Mediator` and enable `<InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);KetPsi.Mediator</InterceptorsPreviewNamespaces>`.
   - The generator emits `[InterceptsLocation]` methods for every concrete `mediator.Send(...)` call site without needing access to the handler classes in `Application`. Because `Services` has no handlers of its own, the generator will not emit a duplicate `AddMediatorHandlers()` extension class.
+
+### Several projects with handlers (modular monoliths)
+
+Each project that contains handlers also gets an **assembly-specific** registration method named `Add{AssemblyName}MediatorHandlers()`. Non-identifier characters are removed from the assembly name and each segment is capitalized. When the composition root references more than one handler project, `AddMediatorHandlers()` becomes ambiguous (CS0121). Call the assembly-specific methods instead:
+
+```csharp
+// Orders.Application.dll and Billing.Application.dll both contain handlers
+builder.Services.AddOrdersApplicationMediatorHandlers();
+builder.Services.AddBillingApplicationMediatorHandlers();
+```
 
 ---
 
-## Dynamic / Reflection Fallback
+## Dynamic Dispatch Fallback
 
-When the concrete request type is not known statically at compile time (for example, when dispatching a polymorphic `ICommand` or `IRequest<TResponse>` variable), the call is not intercepted and falls back to `Mediator.Send(...)`:
+When the concrete request type is not known statically at compile time, the call is not intercepted and falls back to `Mediator.Send(...)`. Examples are a polymorphic `ICommand` or `IRequest<TResponse>` variable, a request type that depends on a generic type parameter, or a private nested request type.
 
 ```csharp
 ICommand dynamicCommand = GetNextCommand();
 await mediator.Send(dynamicCommand, ct);
 ```
 
-The runtime fallback resolves both the matching handler and any registered `IPipelineBehavior<,>` instances so pipeline behavior semantics remain consistent across static and dynamic dispatch.
+The fallback builds one strongly-typed dispatcher per request type and caches it. It then runs the same `PipelineExecutor` as the intercepted path, so:
+- `ICommand`, `ICommand<TResponse>`, and `IQuery<TResponse>` resolve the correct handler interface.
+- Registered `IPipelineBehavior<,>` instances run in the same order.
+- Exceptions thrown by handlers and behaviors propagate unwrapped, exactly as on the intercepted path.
+- Covariant calls such as `mediator.Send<object>(new GetProductQuery(...))` resolve the handler for the request's declared response type.
+
+---
+
+## Diagnostics
+
+| ID | Severity | Meaning |
+|---|---|---|
+| `KPM001` | Warning | More than one handler implements the same request in a project. Only the first is registered by `AddMediatorHandlers()`. |
+
+---
+
+## Notes & Limitations
+
+- Interceptors cast to the built-in `Mediator` only when the receiver *is* one. Other `IMediator` implementations receive the original `Send` call.
+- `AddKetPsiMediator()` (manual registration of `IMediator` only) defaults to `ServiceLifetime.Scoped`, consistent with `AddMediatorHandlers()`.
+- Interceptors currently use the file-path form of `[InterceptsLocation]` for compatibility with the .NET 8 SDK.
 
 ---
 
