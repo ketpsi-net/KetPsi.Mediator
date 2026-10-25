@@ -4,6 +4,7 @@ using Xunit;
 
 namespace KetPsi.Mediator.Tests;
 
+[Collection(SharedStateCollection.Name)]
 public class MediatorTests
 {
     private static ServiceProvider BuildServices(Action<IServiceCollection>? configure = null)

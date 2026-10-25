@@ -29,13 +29,16 @@
 	</ItemGroup>
 
 
-	<!-- Consumers should also reference the generator -->
+	<!-- The generator ships inside this package (analyzers/dotnet/cs); there is no separate generator package.
+	     The build-only ProjectReference guarantees it is built before pack, so the DLL can never be silently missing. -->
 	<ItemGroup>
+		<ProjectReference Include="..\KetPsi.Mediator.Generator\KetPsi.Mediator.Generator.csproj"
+						  ReferenceOutputAssembly="false"
+						  PrivateAssets="all" />
 		<None Include="..\KetPsi.Mediator.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Mediator.Generator.dll"
 			  Pack="true"
 			  PackagePath="analyzers/dotnet/cs"
-			  Visible="false"
-			  Condition="Exists('..\KetPsi.Mediator.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Mediator.Generator.dll')" />
+			  Visible="false" />
 	</ItemGroup>
 
 </Project>
