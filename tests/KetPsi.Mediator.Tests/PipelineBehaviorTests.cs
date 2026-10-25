@@ -4,6 +4,7 @@ using Xunit;
 
 namespace KetPsi.Mediator.Tests;
 
+[Collection(SharedStateCollection.Name)]
 public class PipelineBehaviorTests
 {
     [Fact]

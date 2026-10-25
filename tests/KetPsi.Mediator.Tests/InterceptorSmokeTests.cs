@@ -6,6 +6,7 @@ namespace KetPsi.Mediator.Tests;
 /// <summary>
 /// Exercises concrete call sites that the source generator should intercept.
 /// </summary>
+[Collection(SharedStateCollection.Name)]
 public class InterceptorSmokeTests
 {
     [Fact]
