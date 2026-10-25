@@ -1,4 +1,5 @@
-using System.Reflection;
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace KetPsi.Mediator;
@@ -13,12 +14,16 @@ namespace KetPsi.Mediator;
 /// (for example when the call site receives an <see cref="ICommand"/> variable).
 /// </para>
 /// <para>
-/// The reflection fallback still runs registered <see cref="IPipelineBehavior{TRequest,TResponse}"/>
-/// instances so cross-cutting concerns apply consistently.
+/// The fallback builds one strongly-typed dispatcher per request type (cached for the
+/// lifetime of the process) and runs it through <see cref="PipelineExecutor"/>, so
+/// registered <see cref="IPipelineBehavior{TRequest,TResponse}"/> instances apply and
+/// exceptions propagate exactly as they do on the intercepted path.
 /// </para>
 /// </remarks>
 public sealed partial class Mediator : IMediator
 {
+    private static readonly ConcurrentDictionary<Type, VoidCommandDispatcher> VoidCommandDispatchers = new();
+
     /// <summary>
     /// The service provider used to resolve handlers and pipeline behaviors.
     /// Exposed for source-generated interceptors in the same compilation.
@@ -43,16 +48,8 @@ public sealed partial class Mediator : IMediator
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var requestType = command.GetType();
-        var handlerType = typeof(ICommandHandler<>).MakeGenericType(requestType);
-        var handler = Services.GetRequiredService(handlerType);
-
-        // Build Func<TCommand, CancellationToken, ValueTask> via reflection, then run through Unit pipeline.
-        var handleMethod = handlerType.GetMethod("Handle")!;
-        var behaviorType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, typeof(Unit));
-        var behaviors = GetServicesOfType(behaviorType);
-
-        return InvokeUnitPipeline(requestType, command, handler, handleMethod, behaviors, cancellationToken);
+        var dispatcher = VoidCommandDispatchers.GetOrAdd(command.GetType(), CreateVoidCommandDispatcher);
+        return dispatcher.Send(this, command, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -60,28 +57,8 @@ public sealed partial class Mediator : IMediator
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var requestType = request.GetType();
-
-        object handler;
-        MethodInfo handleMethod;
-
-        if (request is ICommand)
-        {
-            var commandHandlerType = typeof(ICommandHandler<,>).MakeGenericType(requestType, typeof(TResponse));
-            handler = Services.GetRequiredService(commandHandlerType);
-            handleMethod = commandHandlerType.GetMethod("Handle")!;
-        }
-        else
-        {
-            var queryHandlerType = typeof(IQueryHandler<,>).MakeGenericType(requestType, typeof(TResponse));
-            handler = Services.GetRequiredService(queryHandlerType);
-            handleMethod = queryHandlerType.GetMethod("Handle")!;
-        }
-
-        var behaviorType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, typeof(TResponse));
-        var behaviors = GetServicesOfType(behaviorType);
-
-        return InvokeResponsePipeline<TResponse>(requestType, request, handler, handleMethod, behaviors, cancellationToken);
+        var dispatcher = ResponseDispatcherCache<TResponse>.Dispatchers.GetOrAdd(request.GetType(), CreateResponseDispatcher<TResponse>);
+        return dispatcher.Send(this, request, cancellationToken);
     }
 
     /// <summary>
@@ -95,124 +72,115 @@ public sealed partial class Mediator : IMediator
     /// Resolves all registered services of type <typeparamref name="T"/>.
     /// Used by source-generated interceptors to obtain pipeline behaviors.
     /// </summary>
+    /// <remarks>
+    /// Returns an empty sequence when nothing is registered. Activation failures
+    /// (for example a behavior with an unregistered dependency) are not swallowed,
+    /// so a misconfigured behavior can never be silently skipped.
+    /// </remarks>
     public IEnumerable<T> GetServices<T>()
+        => ServiceProviderServiceExtensions.GetServices<T>(Services);
+
+    private static VoidCommandDispatcher CreateVoidCommandDispatcher(Type commandType)
+        => (VoidCommandDispatcher)Activator.CreateInstance(
+            typeof(VoidCommandDispatcher<>).MakeGenericType(commandType))!;
+
+    private static ResponseDispatcher<TResponse> CreateResponseDispatcher<TResponse>(Type requestType)
     {
-        try
+        // Pick the IQuery<T> / ICommand<T> the request actually implements. T may differ from
+        // TResponse when IRequest<out TResponse> covariance was used at the call site
+        // (e.g. Send<object>(query returning string)); handlers are keyed by T.
+        Type? match = null;
+        Type? matchDefinition = null;
+
+        foreach (var iface in requestType.GetInterfaces())
         {
-            return ServiceProviderServiceExtensions.GetServices<T>(Services);
+            if (!iface.IsGenericType)
+                continue;
+
+            var definition = iface.GetGenericTypeDefinition();
+            if (definition != typeof(IQuery<>) && definition != typeof(ICommand<>))
+                continue;
+
+            var actual = iface.GetGenericArguments()[0];
+            if (!typeof(TResponse).IsAssignableFrom(actual))
+                continue;
+
+            match = actual;
+            matchDefinition = definition;
+            if (actual == typeof(TResponse))
+                break;
         }
-        catch (InvalidOperationException)
+
+        if (match is null)
         {
-            return Array.Empty<T>();
+            throw new InvalidOperationException(
+                $"Request type '{requestType}' must implement ICommand<{typeof(TResponse).Name}> or IQuery<{typeof(TResponse).Name}> to be sent through the mediator.");
+        }
+
+        var dispatcherDefinition = matchDefinition == typeof(IQuery<>)
+            ? typeof(QueryDispatcher<,,>)
+            : typeof(CommandDispatcher<,,>);
+
+        return (ResponseDispatcher<TResponse>)Activator.CreateInstance(
+            dispatcherDefinition.MakeGenericType(requestType, match, typeof(TResponse)))!;
+    }
+
+    private static class ResponseDispatcherCache<TResponse>
+    {
+        public static readonly ConcurrentDictionary<Type, ResponseDispatcher<TResponse>> Dispatchers = new();
+    }
+
+    private abstract class VoidCommandDispatcher
+    {
+        public abstract ValueTask Send(Mediator mediator, ICommand command, CancellationToken cancellationToken);
+    }
+
+    private sealed class VoidCommandDispatcher<TCommand> : VoidCommandDispatcher
+        where TCommand : ICommand
+    {
+        public override ValueTask Send(Mediator mediator, ICommand command, CancellationToken cancellationToken)
+        {
+            var handler = mediator.GetRequiredService<ICommandHandler<TCommand>>();
+            var behaviors = mediator.GetServices<IPipelineBehavior<TCommand, Unit>>();
+            return PipelineExecutor.ExecuteUnit((TCommand)command, behaviors, handler, cancellationToken);
         }
     }
 
-    private IEnumerable<object> GetServicesOfType(Type serviceType)
+    private abstract class ResponseDispatcher<TResponse>
     {
-        try
+        public abstract ValueTask<TResponse> Send(Mediator mediator, IRequest<TResponse> request, CancellationToken cancellationToken);
+
+        protected static ValueTask<TResponse> Convert<TActual>(ValueTask<TActual> result)
         {
-            var enumerableType = typeof(IEnumerable<>).MakeGenericType(serviceType);
-            var result = Services.GetService(enumerableType);
-            if (result is System.Collections.IEnumerable enumerable)
-            {
-                var list = new List<object>();
-                foreach (var item in enumerable)
-                {
-                    if (item is not null)
-                        list.Add(item);
-                }
-                return list;
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // treat as empty
+            if (typeof(TActual) == typeof(TResponse))
+                return Unsafe.As<ValueTask<TActual>, ValueTask<TResponse>>(ref result);
+
+            return ConvertSlow(result);
         }
 
-        return Array.Empty<object>();
+        private static async ValueTask<TResponse> ConvertSlow<TActual>(ValueTask<TActual> result)
+            => (TResponse)(object)(await result.ConfigureAwait(false))!;
     }
 
-    private static ValueTask<TResponse> InvokeResponsePipeline<TResponse>(
-        Type requestType,
-        object request,
-        object handler,
-        MethodInfo handleMethod,
-        IEnumerable<object> behaviors,
-        CancellationToken cancellationToken)
+    private sealed class QueryDispatcher<TQuery, TActual, TResponse> : ResponseDispatcher<TResponse>
+        where TQuery : IQuery<TActual>
     {
-        var behaviorList = behaviors as IList<object> ?? behaviors.ToList();
-
-        // Fast path: no behaviors → call handler directly
-        if (behaviorList.Count == 0)
-            return (ValueTask<TResponse>)handleMethod.Invoke(handler, new object[] { request, cancellationToken })!;
-
-        // Build chain from the end (handler) toward the first behavior.
-        // Each behavior.Handle(request, next, ct) where next is RequestHandlerDelegate<TResponse>.
-        var delegateType = typeof(RequestHandlerDelegate<>).MakeGenericType(typeof(TResponse));
-
-        // Terminal: call the real handler
-        RequestHandlerDelegate<TResponse> next = () =>
-            (ValueTask<TResponse>)handleMethod.Invoke(handler, new object[] { request, cancellationToken })!;
-
-        var handleBehaviorMethod = typeof(IPipelineBehavior<,>)
-            .MakeGenericType(requestType, typeof(TResponse))
-            .GetMethod("Handle")!;
-
-        for (int i = behaviorList.Count - 1; i >= 0; i--)
+        public override ValueTask<TResponse> Send(Mediator mediator, IRequest<TResponse> request, CancellationToken cancellationToken)
         {
-            var behavior = behaviorList[i];
-            var current = next;
-            next = () =>
-            {
-                var result = handleBehaviorMethod.Invoke(behavior, new object[] { request, current, cancellationToken });
-                return (ValueTask<TResponse>)result!;
-            };
+            var handler = mediator.GetRequiredService<IQueryHandler<TQuery, TActual>>();
+            var behaviors = mediator.GetServices<IPipelineBehavior<TQuery, TActual>>();
+            return Convert(PipelineExecutor.ExecuteQuery((TQuery)request, behaviors, handler, cancellationToken));
         }
-
-        return next();
     }
 
-    private static ValueTask InvokeUnitPipeline(
-        Type requestType,
-        object request,
-        object handler,
-        MethodInfo handleMethod,
-        IEnumerable<object> behaviors,
-        CancellationToken cancellationToken)
+    private sealed class CommandDispatcher<TCommand, TActual, TResponse> : ResponseDispatcher<TResponse>
+        where TCommand : ICommand<TActual>
     {
-        var behaviorList = behaviors as IList<object> ?? behaviors.ToList();
-
-        if (behaviorList.Count == 0)
-            return (ValueTask)handleMethod.Invoke(handler, new object[] { request, cancellationToken })!;
-
-        // Reuse response pipeline with Unit adapter
-        RequestHandlerDelegate<Unit> next = async () =>
+        public override ValueTask<TResponse> Send(Mediator mediator, IRequest<TResponse> request, CancellationToken cancellationToken)
         {
-            await ((ValueTask)handleMethod.Invoke(handler, new object[] { request, cancellationToken })!)
-                .ConfigureAwait(false);
-            return Unit.Value;
-        };
-
-        var handleBehaviorMethod = typeof(IPipelineBehavior<,>)
-            .MakeGenericType(requestType, typeof(Unit))
-            .GetMethod("Handle")!;
-
-        for (int i = behaviorList.Count - 1; i >= 0; i--)
-        {
-            var behavior = behaviorList[i];
-            var current = next;
-            next = () =>
-            {
-                var result = handleBehaviorMethod.Invoke(behavior, new object[] { request, current, cancellationToken });
-                return (ValueTask<Unit>)result!;
-            };
+            var handler = mediator.GetRequiredService<ICommandHandler<TCommand, TActual>>();
+            var behaviors = mediator.GetServices<IPipelineBehavior<TCommand, TActual>>();
+            return Convert(PipelineExecutor.ExecuteCommand((TCommand)request, behaviors, handler, cancellationToken));
         }
-
-        return AwaitUnit(next);
-    }
-
-    private static async ValueTask AwaitUnit(RequestHandlerDelegate<Unit> next)
-    {
-        await next().ConfigureAwait(false);
     }
 }

@@ -19,7 +19,9 @@ public static class ServiceCollectionExtensions
     /// <param name="services">The service collection to configure.</param>
     /// <param name="lifetime">
     /// The lifetime for <see cref="IMediator"/>. Defaults to
-    /// <see cref="ServiceLifetime.Singleton"/>.
+    /// <see cref="ServiceLifetime.Scoped"/>, matching the generated <c>AddMediatorHandlers()</c>.
+    /// A singleton mediator resolves handlers from the root provider, which captures
+    /// scoped handlers (e.g. ones depending on a <c>DbContext</c>) for the app's lifetime.
     /// </param>
     /// <returns>The same <paramref name="services"/> instance for chaining.</returns>
     /// <remarks>
@@ -28,7 +30,7 @@ public static class ServiceCollectionExtensions
     /// </remarks>
     public static IServiceCollection AddKetPsiMediator(
         this IServiceCollection services,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Scoped)
     {
         services.TryAdd(ServiceDescriptor.Describe(typeof(IMediator), typeof(Mediator), lifetime));
         return services;
