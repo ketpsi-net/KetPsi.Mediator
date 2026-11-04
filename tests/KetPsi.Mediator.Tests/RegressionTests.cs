@@ -215,10 +215,22 @@ public class RegressionTests
     [Fact]
     public async Task CallSite_WithPrivateRequestType_FallsBackInsteadOfBreakingTheBuild()
     {
+        // The generator cannot see private handlers, so both the handler and its fallback dispatcher are registered by hand.
+        MediatorDispatcherRegistry.AddQuery<PrivateQuery, int>();
         using var sp = BuildServices(s => s.AddSingleton<IQueryHandler<PrivateQuery, int>, PrivateQueryHandler>());
         var mediator = sp.GetRequiredService<IMediator>();
 
         Assert.Equal(7, await mediator.Send(new PrivateQuery()));
+    }
+
+    [Fact]
+    public async Task Fallback_WithoutRegisteredDispatcher_ThrowsInsteadOfUsingReflection()
+    {
+        using var sp = BuildServices(s => s.AddSingleton<IQueryHandler<UnregisteredQuery, int>, UnregisteredQueryHandler>());
+        var mediator = sp.GetRequiredService<IMediator>();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await mediator.Send(new UnregisteredQuery()));
+        Assert.Contains(nameof(MediatorDispatcherRegistry), ex.Message);
     }
 
     [Fact]
@@ -244,6 +256,14 @@ public class RegressionTests
         => mediator.Send(new EchoQuery<T>(value));
 
     private sealed record PrivateQuery : IQuery<int>;
+
+    private sealed record UnregisteredQuery : IQuery<int>;
+
+    private sealed class UnregisteredQueryHandler : IQueryHandler<UnregisteredQuery, int>
+    {
+        public ValueTask<int> Handle(UnregisteredQuery query, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(0);
+    }
 
     private sealed class PrivateQueryHandler : IQueryHandler<PrivateQuery, int>
     {

@@ -404,6 +404,8 @@ namespace System.Runtime.CompilerServices
         sb.AppendLine();
 
         var registeredConcrete = new HashSet<string>();
+        // Each handler also registers a closed-generic fallback dispatcher, so Mediator.Send on an
+        // interface-typed request never needs MakeGenericType (Native AOT / trimming safe).
         foreach (var h in handlers.Distinct())
         {
             // Concrete type + interface forwarding share the same lifetime and instance.
@@ -414,12 +416,15 @@ namespace System.Runtime.CompilerServices
             {
                 case HandlerKind.Command:
                     sb.AppendLine($"            services.TryAdd(ServiceDescriptor.Describe(typeof(global::KetPsi.Mediator.ICommandHandler<{h.RequestType}>), sp => sp.GetRequiredService<{h.HandlerType}>(), lifetime));");
+                    sb.AppendLine($"            global::KetPsi.Mediator.MediatorDispatcherRegistry.AddCommand<{h.RequestType}>();");
                     break;
                 case HandlerKind.CommandWithResponse:
                     sb.AppendLine($"            services.TryAdd(ServiceDescriptor.Describe(typeof(global::KetPsi.Mediator.ICommandHandler<{h.RequestType}, {h.ResponseType}>), sp => sp.GetRequiredService<{h.HandlerType}>(), lifetime));");
+                    sb.AppendLine($"            global::KetPsi.Mediator.MediatorDispatcherRegistry.AddCommand<{h.RequestType}, {h.ResponseType}>();");
                     break;
                 case HandlerKind.Query:
                     sb.AppendLine($"            services.TryAdd(ServiceDescriptor.Describe(typeof(global::KetPsi.Mediator.IQueryHandler<{h.RequestType}, {h.ResponseType}>), sp => sp.GetRequiredService<{h.HandlerType}>(), lifetime));");
+                    sb.AppendLine($"            global::KetPsi.Mediator.MediatorDispatcherRegistry.AddQuery<{h.RequestType}, {h.ResponseType}>();");
                     break;
             }
         }
