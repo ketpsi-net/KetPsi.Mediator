@@ -126,7 +126,13 @@ await mediator.Send(new EchoQuery<T>(value), ct);         // fallback (depends o
 await mediator.Send<object>(new GetProductQuery("x"));    // fallback (covariant response)
 ```
 
-The fallback (`Mediator.Send`) caches a strongly-typed dispatcher per request type. It resolves the right handler, runs the same behaviors, and propagates the same exceptions as the intercepted path; it is only slower. In hot paths, keep the request's concrete type visible at the call site.
+The fallback (`Mediator.Send`) looks up the strongly-typed dispatcher that `AddMediatorHandlers()` registered for the request type. It resolves the right handler, runs the same behaviors, and propagates the same exceptions as the intercepted path; it is only slower. In hot paths, keep the request's concrete type visible at the call site.
+
+Both the intercepted path and the fallback are Native AOT and trimming safe (no reflection). A handler registered manually in DI, which the generator can't see, needs its dispatcher registered too if it is sent through the fallback; otherwise `Send` throws `InvalidOperationException`:
+
+```csharp
+MediatorDispatcherRegistry.AddQuery<MyQuery, MyResult>();   // also AddCommand<TCommand>() and AddCommand<TCommand, TResponse>()
+```
 
 ## Pipeline behaviors
 
@@ -189,7 +195,7 @@ builder.Services.AddBillingApplicationMediatorHandlers();
 ## Pitfalls
 
 - **Missing `InterceptorsPreviewNamespaces`** in a project that calls `Send` causes a build error. Add it to that project, not only to the handler project.
-- **Missing handler at runtime** throws `InvalidOperationException` from DI. Check that the handler's project registration method is called, and that the handler isn't private, nested-private, or open generic (those are skipped).
+- **Missing handler at runtime** throws `InvalidOperationException`. Check that the handler's project registration method is called, and that the handler isn't private, nested-private, or open generic (those are skipped). Handlers registered manually and sent through the fallback also need `MediatorDispatcherRegistry.AddQuery`/`AddCommand`.
 - **Singleton mediator with scoped handlers:** passing `ServiceLifetime.Singleton` while handlers depend on scoped services captures them in the root provider. Keep the default Scoped for web apps.
 - **KPM001:** two handlers for one request. Remove one; DI registers only the first.
 - To inspect what was generated, set `<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>` and look in `obj/<Config>/<tfm>/generated/KetPsi.Mediator.Generator/`.

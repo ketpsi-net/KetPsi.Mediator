@@ -183,11 +183,26 @@ ICommand dynamicCommand = GetNextCommand();
 await mediator.Send(dynamicCommand, ct);
 ```
 
-The fallback builds one strongly-typed dispatcher per request type and caches it. It then runs the same `PipelineExecutor` as the intercepted path, so:
+`AddMediatorHandlers()` registers a strongly-typed dispatcher for every handler it discovers, written out as closed generic types at compile time. The fallback looks that dispatcher up and runs the same `PipelineExecutor` as the intercepted path, so:
 - `ICommand`, `ICommand<TResponse>`, and `IQuery<TResponse>` resolve the correct handler interface.
 - Registered `IPipelineBehavior<,>` instances run in the same order.
 - Exceptions thrown by handlers and behaviors propagate unwrapped, exactly as on the intercepted path.
 - Covariant calls such as `mediator.Send<object>(new GetProductQuery(...))` resolve the handler for the request's declared response type.
+- No reflection or runtime code generation is involved, so the fallback is Native AOT and trimming safe.
+
+Handlers you register in DI yourself, which the generator cannot see (for example private nested handlers), also need a dispatcher if they are sent through the fallback. Otherwise `Send` throws `InvalidOperationException`:
+
+```csharp
+MediatorDispatcherRegistry.AddQuery<MyQuery, MyResult>();
+MediatorDispatcherRegistry.AddCommand<MyCommand>();
+MediatorDispatcherRegistry.AddCommand<MyCommandWithResult, Guid>();
+```
+
+---
+
+## Native AOT & Trimming
+
+Both runtime packages are marked `IsAotCompatible` and build with no trim or AOT warnings on `net8.0`, `net9.0`, and `net10.0`. The intercepted path and the fallback both work in Native AOT apps, including value-type responses, void commands, and covariant calls. Generated DI registrations use `typeof(...)` of closed types only.
 
 ---
 
