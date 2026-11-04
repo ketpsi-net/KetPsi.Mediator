@@ -6,6 +6,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<LangVersion>latest</LangVersion>
+		<IsAotCompatible>true</IsAotCompatible>
 		<Description>High-performance mediator powered by C# interceptors and source generators. Call sites of IMediator.Send are rewritten to invoke handlers directly.</Description>
 	</PropertyGroup>
 
