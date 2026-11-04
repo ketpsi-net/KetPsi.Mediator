@@ -3,7 +3,7 @@ name: ketpsi-mediator
 description: How to use the KetPsi.Mediator NuGet packages (compile-time, interceptor-based mediator for .NET 8/9/10) — defining commands, queries, handlers and pipeline behaviors, DI registration with AddMediatorHandlers / Add{Assembly}MediatorHandlers, multi-project setup, testing with mocked IMediator, and pitfalls. Use when code references KetPsi.Mediator, ICommand/IQuery/ICommandHandler/IQueryHandler/IPipelineBehavior from the KetPsi.Mediator namespace, AddMediatorHandlers, the KPM001 diagnostic, or when the user asks to add CQRS/mediator handlers to a project using this package or to migrate from MediatR to it.
 ---
 
-# Using KetPsi.Mediator (1.1+)
+# Using KetPsi.Mediator (2.0+)
 
 KetPsi.Mediator is a mediator whose `IMediator.Send(...)` calls are rewritten at compile time by a Roslyn source generator using C# interceptors (`[InterceptsLocation]`). When the request type is known at the call site, the call goes straight to the handler resolved from DI. There is no reflection, no dictionary lookup, and nothing is allocated when no behaviors are registered.
 
