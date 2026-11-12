@@ -1,7 +1,7 @@
 # KetPsi.Mediator
 
 [![NuGet](https://img.shields.io/nuget/v/KetPsi.Mediator.svg)](https://www.nuget.org/packages/KetPsi.Mediator/)
-[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0%20%7C%2011.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 **KetPsi.Mediator** is a high-performance, AOT-friendly mediator for .NET powered by **C# interceptors** and **Roslyn source generators**.
@@ -202,7 +202,7 @@ MediatorDispatcherRegistry.AddCommand<MyCommandWithResult, Guid>();
 
 ## Native AOT & Trimming
 
-Both runtime packages are marked `IsAotCompatible` and build with no trim or AOT warnings on `net8.0`, `net9.0`, and `net10.0`. The intercepted path and the fallback both work in Native AOT apps, including value-type responses, void commands, and covariant calls. Generated DI registrations use `typeof(...)` of closed types only.
+Both runtime packages are marked `IsAotCompatible` and build with no trim or AOT warnings on `net9.0`, `net10.0`, and `net11.0`. The intercepted path and the fallback both work in Native AOT apps, including value-type responses, void commands, and covariant calls. Generated DI registrations use `typeof(...)` of closed types only.
 
 ---
 
@@ -218,7 +218,7 @@ Both runtime packages are marked `IsAotCompatible` and build with no trim or AOT
 
 - Interceptors cast to the built-in `Mediator` only when the receiver *is* one. Other `IMediator` implementations receive the original `Send` call.
 - `AddKetPsiMediator()` (manual registration of `IMediator` only) defaults to `ServiceLifetime.Scoped`, consistent with `AddMediatorHandlers()`.
-- Interceptors currently use the file-path form of `[InterceptsLocation]` for compatibility with the .NET 8 SDK.
+- Interceptors currently use the file-path form of `[InterceptsLocation]`. Newer SDKs prefer the `InterceptableLocation` form.
 
 ---
 
