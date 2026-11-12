@@ -1,7 +1,7 @@
 # KetPsi.Mediator.Abstractions
 
 [![NuGet](https://img.shields.io/nuget/v/KetPsi.Mediator.Abstractions.svg)](https://www.nuget.org/packages/KetPsi.Mediator.Abstractions/)
-[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0%20%7C%2011.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 Core interfaces and contracts for **KetPsi.Mediator**, a high-performance mediator for .NET powered by C# interceptors and Roslyn source generators.

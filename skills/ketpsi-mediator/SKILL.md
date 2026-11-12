@@ -1,6 +1,6 @@
 ---
 name: ketpsi-mediator
-description: How to use the KetPsi.Mediator NuGet packages (compile-time, interceptor-based mediator for .NET 8/9/10) — defining commands, queries, handlers and pipeline behaviors, DI registration with AddMediatorHandlers / Add{Assembly}MediatorHandlers, multi-project setup, testing with mocked IMediator, and pitfalls. Use when code references KetPsi.Mediator, ICommand/IQuery/ICommandHandler/IQueryHandler/IPipelineBehavior from the KetPsi.Mediator namespace, AddMediatorHandlers, the KPM001 diagnostic, or when the user asks to add CQRS/mediator handlers to a project using this package or to migrate from MediatR to it.
+description: How to use the KetPsi.Mediator NuGet packages (compile-time, interceptor-based mediator for .NET 9/10/11) — defining commands, queries, handlers and pipeline behaviors, DI registration with AddMediatorHandlers / Add{Assembly}MediatorHandlers, multi-project setup, testing with mocked IMediator, and pitfalls. Use when code references KetPsi.Mediator, ICommand/IQuery/ICommandHandler/IQueryHandler/IPipelineBehavior from the KetPsi.Mediator namespace, AddMediatorHandlers, the KPM001 diagnostic, or when the user asks to add CQRS/mediator handlers to a project using this package or to migrate from MediatR to it.
 ---
 
 # Using KetPsi.Mediator (2.0+)
